@@ -1,0 +1,28 @@
+name: Build IPA
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build (sans signature)
+        run: |
+          xcodebuild archive \
+            -project <Projet>.xcodeproj \
+            -scheme <Scheme> \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath build/App.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+      - name: Créer l'IPA
+        run: |
+          mkdir Payload
+          cp -R build/App.xcarchive/Products/Applications/*.app Payload/
+          zip -r Folium.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Folium-ipa
+          path: Folium.ipa
