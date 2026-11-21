@@ -9,6 +9,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Choisir le plus récent Xcode installé
+        run: |
+          ls -d /Applications/Xcode*.app
+          LATEST=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -n1)
+          echo "Utilisé : $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
+
       - name: Détecter projet et scheme
         id: detect
         run: |
