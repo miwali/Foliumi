@@ -4,87 +4,63 @@ on: workflow_dispatch
 jobs:
   build:
     runs-on: macos-26
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - name: Choisir le plus récent Xcode installé
+      - name: Xcode disponibles
         run: |
           ls -d /Applications/Xcode*.app
-          LATEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -n1)
-          echo "Utilisé : $LATEST"
-          sudo xcode-select -s "$LATEST/Contents/Developer"
-          xcodebuild -version
+          xcode-select -p
 
-      - name: Détecter projet et scheme
-        id: detect
+      - name: Archive avec plusieurs versions d'Xcode
         run: |
-          set -eo pipefail
-          WS=$(find . -maxdepth 3 -name "*.xcworkspace" -not -path "*.xcodeproj/*" -not -path "*/Pods/*" | head -n1)
-          PROJ=$(find . -maxdepth 3 -name "*.xcodeproj" -not -path "*/Pods/*" | head -n1)
-          if [ -n "$WS" ]; then
-            FLAG="-workspace"; TARGET="$WS"
-          elif [ -n "$PROJ" ]; then
-            FLAG="-project"; TARGET="$PROJ"
-          else
-            echo "Aucun .xcworkspace ni .xcodeproj trouvé"; exit 1
+          set +e
+          PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" -not -path "*/.git/*" | head -n1)
+          echo "Projet : $PROJ"
+          SUCCESS=0
+          for APP in $(ls -d /Applications/Xcode_*.app | sort -Vr | head -n 4); do
+            NAME=$(basename "$APP" .app)
+            LOG="build-$NAME.log"
+            echo "=============== $NAME ==============="
+            sudo xcode-select -s "$APP/Contents/Developer"
+            xcodebuild -version
+            if ! xcodebuild -list -project "$PROJ" >/dev/null 2>&1; then
+              echo "Format illisible : objectVersion abaissé à 77 (contournement)"
+              find . -maxdepth 4 -name project.pbxproj -not -path "*/.git/*" \
+                -exec sed -i '' -E 's/objectVersion = [0-9]+;/objectVersion = 77;/' {} +
+            fi
+            rm -rf build
+            xcodebuild archive \
+              -project "$PROJ" \
+              -scheme Folium \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -configuration Release \
+              -archivePath build/App.xcarchive \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+              > "$LOG" 2>&1
+            CODE=$?
+            echo "Code retour : $CODE"
+            if [ $CODE -eq 0 ] && [ -d build/App.xcarchive/Products/Applications ]; then
+              echo "RÉUSSI avec $NAME"
+              SUCCESS=1
+              break
+            fi
+            echo "--- Erreurs ($NAME) ---"
+            grep -E "error:" "$LOG" | grep -v "warning:" | head -n 8
+          done
+          if [ $SUCCESS -ne 1 ]; then
+            echo "Aucune version d'Xcode n'a réussi."
+            exit 1
           fi
-          if ! xcodebuild -list $FLAG "$TARGET" >/dev/null 2>&1; then
-            echo "Lecture impossible : on abaisse objectVersion à 77 (contournement)"
-            find . -maxdepth 4 -name project.pbxproj -not -path "*/.git/*" \
-              -exec sed -i '' -E 's/objectVersion = [0-9]+;/objectVersion = 77;/' {} +
-          fi
-          xcodebuild -list $FLAG "$TARGET"
-          xcodebuild -list -json $FLAG "$TARGET" > list.json
-          SCHEME=$(python3 - <<'EOF'
-          import json
-          d = json.load(open("list.json"))
-          k = d.get("workspace") or d.get("project")
-          s = k["schemes"]
-          print("Schemes trouvés :", s, file=__import__("sys").stderr)
-          print("Folium" if "Folium" in s else s[0])
-          EOF
-          )
-          echo "Utilisé : $FLAG $TARGET / scheme $SCHEME"
-          echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
-
-      - name: Archive (sans signature)
-        run: |
-          set -eo pipefail
-          xcodebuild archive \
-            ${{ steps.detect.outputs.flag }} "${{ steps.detect.outputs.target }}" \
-            -scheme "${{ steps.detect.outputs.scheme }}" \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -configuration Release \
-            -archivePath build/App.xcarchive \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            | tee build.log
-
-      - name: Résumé des erreurs
-        if: failure()
-        run: |
-          echo "=== Lignes d'erreur ==="
-          grep -nE "error:|ARCHIVE FAILED|fatal error|The following build commands failed" build.log | head -n 40 || true
-          echo "=== Fin du log ==="
-          tail -n 40 build.log
-
-      - name: Contenu de l'archive (debug)
-        if: always()
-        run: |
-          find build/App.xcarchive -maxdepth 4 | head -n 60 || true
 
       - name: Créer l'IPA
         run: |
           set -e
           APP=$(find build/App.xcarchive/Products -maxdepth 3 -name "*.app" | head -n1)
-          if [ -z "$APP" ]; then
-            echo "Aucune .app dans l'archive : le scheme choisi n'est pas l'application."
-            exit 1
-          fi
           echo "App trouvée : $APP"
           mkdir -p Payload
           cp -R "$APP" Payload/
@@ -98,6 +74,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: build-log
-          path: build.log
+          name: build-logs
+          path: build-*.log
           if-no-files-found: ignore
