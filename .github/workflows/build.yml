@@ -64,6 +64,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             | tee build.log
 
+      - name: Résumé des erreurs
+        if: failure()
+        run: |
+          echo "=== Lignes d'erreur ==="
+          grep -nE "error:|ARCHIVE FAILED|fatal error|The following build commands failed" build.log | head -n 40 || true
+          echo "=== Fin du log ==="
+          tail -n 40 build.log
+
       - name: Contenu de l'archive (debug)
         if: always()
         run: |
