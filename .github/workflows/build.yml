@@ -5,24 +5,39 @@ jobs:
   build:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: Build (sans signature)
+
+      - name: Détecter projet et scheme
+        id: detect
         run: |
+          set -eo pipefail
+          ls -la
+          WS=$(find . -maxdepth 3 -name "*.xcworkspace" -not -path "*.xcodeproj/*" -not -path "*/Pods/*" | head -n1)
+          PROJ=$(find . -maxdepth 3 -name "*.xcodeproj" -not -path "*/Pods/*" | head -n1)
+          if [ -n "$WS" ]; then
+            FLAG="-workspace"; TARGET="$WS"
+          elif [ -n "$PROJ" ]; then
+            FLAG="-project"; TARGET="$PROJ"
+          else
+            echo "Aucun .xcworkspace ni .xcodeproj trouvé"; exit 1
+          fi
+          xcodebuild -list $FLAG "$TARGET"
+          SCHEME=$(xcodebuild -list -json $FLAG "$TARGET" | python3 -c "import sys,json; d=json.load(sys.stdin); k=d.get('workspace') or d.get('project'); print(k['schemes'][0])")
+          echo "Utilisé : $FLAG $TARGET / scheme $SCHEME"
+          echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+      - name: Archive (sans signature)
+        run: |
+          set -eo pipefail
           xcodebuild archive \
-            -project <Projet>.xcodeproj \
-            -scheme <Scheme> \
+            ${{ steps.detect.outputs.flag }} "${{ steps.detect.outputs.target }}" \
+            -scheme "${{ steps.detect.outputs.scheme }}" \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -configuration Release \
             -archivePath build/App.xcarchive \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
-      - name: Créer l'IPA
-        run: |
-          mkdir Payload
-          cp -R build/App.xcarchive/Products/Applications/*.app Payload/
-          zip -r Folium.ipa Payload
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Folium-ipa
-          path: Folium.ipa
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
