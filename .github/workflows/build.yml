@@ -36,7 +36,16 @@ jobs:
               -exec sed -i '' -E 's/objectVersion = [0-9]+;/objectVersion = 77;/' {} +
           fi
           xcodebuild -list $FLAG "$TARGET"
-          SCHEME=$(xcodebuild -list -json $FLAG "$TARGET" | python3 -c "import sys,json; d=json.load(sys.stdin); k=d.get('workspace') or d.get('project'); print(k['schemes'][0])")
+          xcodebuild -list -json $FLAG "$TARGET" > list.json
+          SCHEME=$(python3 - <<'EOF'
+          import json
+          d = json.load(open("list.json"))
+          k = d.get("workspace") or d.get("project")
+          s = k["schemes"]
+          print("Schemes trouvés :", s, file=__import__("sys").stderr)
+          print("Folium" if "Folium" in s else s[0])
+          EOF
+          )
           echo "Utilisé : $FLAG $TARGET / scheme $SCHEME"
           echo "flag=$FLAG" >> "$GITHUB_OUTPUT"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
@@ -55,11 +64,22 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             | tee build.log
 
+      - name: Contenu de l'archive (debug)
+        if: always()
+        run: |
+          find build/App.xcarchive -maxdepth 4 | head -n 60 || true
+
       - name: Créer l'IPA
         run: |
           set -e
+          APP=$(find build/App.xcarchive/Products -maxdepth 3 -name "*.app" | head -n1)
+          if [ -z "$APP" ]; then
+            echo "Aucune .app dans l'archive : le scheme choisi n'est pas l'application."
+            exit 1
+          fi
+          echo "App trouvée : $APP"
           mkdir -p Payload
-          cp -R build/App.xcarchive/Products/Applications/*.app Payload/
+          cp -R "$APP" Payload/
           zip -r Folium.ipa Payload
 
       - uses: actions/upload-artifact@v4
